@@ -1,122 +1,51 @@
-import 'package:appflowy_editor/appflowy_editor.dart';
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pdfrx/pdfrx.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_manager/window_manager.dart';
 
-void main() {
+import 'app/app.dart';
+import 'core/db_backup.dart';
+import 'core/shared_preferences_provider.dart';
+import 'core/window_state.dart';
+import 'data/database/database_provider.dart';
+
+const _defaultWindowSize = Size(1280, 800);
+const _minimumWindowSize = Size(720, 480);
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   pdfrxFlutterInitialize();
-  runApp(const MyApp());
-}
+  await windowManager.ensureInitialized();
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final prefs = await SharedPreferences.getInstance();
+  final windowPrefs = WindowStatePrefs(prefs);
+  final savedBounds = windowPrefs.bounds;
 
-  @override
-  Widget build(BuildContext context) {
-    return const MaterialApp(
-      localizationsDelegates: [
-        AppFlowyEditorLocalizations.delegate,
-      ],
-      home: Scaffold(
-        body: SafeArea(
-          child: TestScreen(),
-        ),
-      ),
-    );
-  }
-}
+  await windowManager.waitUntilReadyToShow(
+    WindowOptions(
+      size: savedBounds?.size ?? _defaultWindowSize,
+      minimumSize: _minimumWindowSize,
+      center: savedBounds == null,
+      title: 'lernapp',
+    ),
+    () async {
+      if (savedBounds != null) {
+        await windowManager.setPosition(savedBounds.topLeft);
+      }
+      await windowManager.show();
+      await windowManager.focus();
+    },
+  );
+  windowManager.addListener(WindowBoundsListener(windowPrefs));
 
-class TestScreen extends StatefulWidget {
-  const TestScreen({super.key});
+  // Built here so the startup backup and the widget tree share one database.
+  final container = ProviderContainer(
+    overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+  );
+  await createStartupBackup(container.read(appDatabaseProvider));
 
-  @override
-  State<TestScreen> createState() => _TestScreenState();
-}
-
-class _TestScreenState extends State<TestScreen> {
-  late final EditorState _editorState;
-  late final EditorScrollController _editorScrollController;
-  String? _pdfPath;
-
-  @override
-  void initState() {
-    super.initState();
-    _editorState = EditorState.blank(withInitialText: true);
-    _editorScrollController = EditorScrollController(
-      editorState: _editorState,
-      shrinkWrap: false,
-    );
-  }
-
-  @override
-  void dispose() {
-    _editorScrollController.dispose();
-    _editorState.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickPdf() async {
-    const typeGroup = XTypeGroup(
-      label: 'PDFs',
-      extensions: <String>['pdf'],
-    );
-    final file = await openFile(acceptedTypeGroups: const [typeGroup]);
-    if (file != null) {
-      setState(() {
-        _pdfPath = file.path;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: FloatingToolbar(
-            items: [
-              paragraphItem,
-              ...headingItems,
-              ...markdownFormatItems,
-              quoteItem,
-              bulletedListItem,
-              numberedListItem,
-              linkItem,
-              buildTextColorItem(),
-              buildHighlightColorItem(),
-            ],
-            editorState: _editorState,
-            editorScrollController: _editorScrollController,
-            textDirection: TextDirection.ltr,
-            child: AppFlowyEditor(
-              editorState: _editorState,
-              editorScrollController: _editorScrollController,
-            ),
-          ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: ElevatedButton(
-                  onPressed: _pickPdf,
-                  child: const Text('Open PDF'),
-                ),
-              ),
-              Expanded(
-                child: _pdfPath != null
-                    ? PdfViewer.file(_pdfPath!)
-                    : const Center(
-                        child: Text('No PDF selected'),
-                      ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  runApp(
+    UncontrolledProviderScope(container: container, child: const LernApp()),
+  );
 }
